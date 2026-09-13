@@ -29,6 +29,32 @@ import threading
 from datetime import datetime
 
 # ---------------------------------------------------------------------------
+# 🔍  AUTO-DETECT optional dependencies (Whisper + yt-dlp + ffmpeg)
+# ---------------------------------------------------------------------------
+def _check_whisper_available() -> tuple[bool, str]:
+    """Returns (is_available, reason_if_not)."""
+    try:
+        import whisper  # noqa: F401
+    except ImportError:
+        return False, "openai-whisper not installed"
+    try:
+        from yt_dlp import YoutubeDL  # noqa: F401
+    except ImportError:
+        return False, "yt-dlp not installed"
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-version"], capture_output=True, timeout=5
+        )
+        if result.returncode != 0:
+            return False, "ffmpeg not found on PATH"
+    except Exception:
+        return False, "ffmpeg not found on PATH"
+    return True, ""
+
+WHISPER_AVAILABLE, WHISPER_MISSING_REASON = _check_whisper_available()
+
+# ---------------------------------------------------------------------------
 # 🔑  API KEY  — set it here OR paste it in the sidebar at runtime
 # ---------------------------------------------------------------------------
 GEMINI_API_KEY = ""   # ← paste your key here, or leave blank and use the sidebar
@@ -908,25 +934,39 @@ with st.sidebar:
     st.markdown("<hr class='section-divider'>", unsafe_allow_html=True)
     st.markdown("**🎙️ Transcript Source**")
 
-    transcript_mode = st.radio(
-        "Source",
-        options=["Auto (YouTube first, then Whisper)", "YouTube captions only", "Whisper AI only"],
-        index=0,
-        label_visibility="collapsed",
-    )
-
-    whisper_model_size = st.selectbox(
-        "Whisper Model Size",
-        options=["tiny", "base", "small", "medium", "large"],
-        index=1,
-        help="tiny=fastest, large=best quality. 'base' is recommended.",
-    )
-
-    fast_whisper = st.checkbox(
-        "⚡ Parallel Whisper (faster for long videos)",
-        value=True,
-        help="Splits audio into segments and transcribes them in parallel threads. Gives ~2-4× speed improvement for 1-3 hour videos.",
-    )
+    if WHISPER_AVAILABLE:
+        transcript_mode = st.radio(
+            "Source",
+            options=["Auto (YouTube first, then Whisper)", "YouTube captions only", "Whisper AI only"],
+            index=0,
+            label_visibility="collapsed",
+        )
+        whisper_model_size = st.selectbox(
+            "Whisper Model Size",
+            options=["tiny", "base", "small", "medium", "large"],
+            index=1,
+            help="tiny=fastest, large=best quality. 'base' is recommended.",
+        )
+        fast_whisper = st.checkbox(
+            "⚡ Parallel Whisper (faster for long videos)",
+            value=True,
+            help="Splits audio into segments and transcribes them in parallel threads. ~2-4x faster for long videos.",
+        )
+    else:
+        # Whisper not available — lock to YouTube captions only
+        transcript_mode = "YouTube captions only"
+        whisper_model_size = "base"
+        fast_whisper = False
+        st.markdown(
+            "<div style='background:rgba(99,102,241,0.10);border:1px solid rgba(99,102,241,0.30);"
+            "border-radius:10px;padding:12px 14px;font-size:12px;color:#a5b4fc;'>"
+            "<b>🎙️ Whisper AI — Not available</b><br>"
+            f"<span style='opacity:0.75;'>{WHISPER_MISSING_REASON}.<br>"
+            "YouTube captions will be used automatically (covers 95%+ of videos).<br>"
+            "To enable Whisper: install <code>openai-whisper</code>, <code>yt-dlp</code> + ffmpeg.</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
     st.markdown("<hr class='section-divider'>", unsafe_allow_html=True)
     st.markdown("**📝 Quiz Settings**")
