@@ -448,21 +448,67 @@ def transcribe_with_whisper(
         progress_callback(5, "📥 Downloading audio from YouTube…")
 
     audio_template = os.path.join(tmp_dir, "audio.%(ext)s")
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "outtmpl": audio_template,
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "96",        # lower bitrate = faster download
-        }],
-        "quiet": True,
-        "no_warnings": True,
-    }
-    with YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
 
-    mp3_files = glob.glob(os.path.join(tmp_dir, "audio.mp3"))
+    # ── Anti-403: realistic browser headers ────────────────────────────────
+    _BASE_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/125.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://www.youtube.com/",
+    }
+
+    def _make_ydl_opts(cookie_browser=None):
+        opts = {
+            "format": "bestaudio/best",
+            "outtmpl": audio_template,
+            "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "96"}],
+            "quiet": True,
+            "no_warnings": True,
+            "http_headers": _BASE_HEADERS,
+            "socket_timeout": 30,
+            "retries": 3,
+            "noplaylist": True,
+        }
+        if cookie_browser:
+            opts["cookiesfrombrowser"] = (cookie_browser,)
+        return opts
+
+    # ── Try Chrome → Edge → Firefox → no cookies (graceful fallback) ───────
+    last_error = None
+    downloaded = False
+    import glob as _glob
+
+    for browser in ["chrome", "edge", "firefox", None]:
+        try:
+            label = browser if browser else "no-cookie fallback"
+            if progress_callback:
+                progress_callback(5, f"📥 Downloading audio ({label})…")
+            with YoutubeDL(_make_ydl_opts(browser)) as ydl:
+                ydl.download([url])
+            downloaded = True
+            break
+        except Exception as exc:
+            last_error = exc
+            # Remove any partial files before retrying
+            for f in _glob.glob(os.path.join(tmp_dir, "audio.*")):
+                try: os.remove(f)
+                except: pass
+
+    if not downloaded:
+        raise RuntimeError(
+            f"YouTube blocked the download (HTTP 403 Forbidden).\n"
+            f"Details: {last_error}\n\n"
+            "How to fix:\n"
+            "  1. Open Chrome/Edge and log into YouTube, then retry\n"
+            "  2. Update yt-dlp:  pip install -U yt-dlp\n"
+            "  3. Try a different video — some videos block all downloads"
+        )
+
+    mp3_files = _glob.glob(os.path.join(tmp_dir, "audio.mp3"))
     if not mp3_files:
         raise RuntimeError("Failed to download audio from YouTube.")
     mp3_path = mp3_files[0]
