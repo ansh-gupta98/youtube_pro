@@ -55,9 +55,25 @@ def _check_whisper_available() -> tuple[bool, str]:
 WHISPER_AVAILABLE, WHISPER_MISSING_REASON = _check_whisper_available()
 
 # ---------------------------------------------------------------------------
-# 🔑  API KEY  — set it here OR paste it in the sidebar at runtime
+# 🔑  API KEY — loaded in priority order:
+#   1. Streamlit Secrets  (recommended for cloud deployment)
+#   2. Environment variable GOOGLE_API_KEY
+#   3. Hardcoded value below (leave blank for sidebar-only entry)
 # ---------------------------------------------------------------------------
-GEMINI_API_KEY = ""   # ← paste your key here, or leave blank and use the sidebar
+GEMINI_API_KEY = ""   # ← hardcode here OR leave blank and use sidebar/secrets
+
+# Auto-load from Streamlit Secrets if available (Streamlit Cloud / HF Spaces)
+try:
+    _secret_key = st.secrets.get("GOOGLE_API_KEY", "") or st.secrets.get("GEMINI_API_KEY", "")
+    if _secret_key:
+        GEMINI_API_KEY = _secret_key
+        os.environ["GOOGLE_API_KEY"] = _secret_key
+except Exception:
+    pass  # st.secrets not available (local run without secrets.toml)
+
+# Auto-load from environment variable (Railway, Render, Docker, etc.)
+if not GEMINI_API_KEY:
+    GEMINI_API_KEY = os.environ.get("GOOGLE_API_KEY", "") or os.environ.get("GEMINI_API_KEY", "")
 
 # ---------------------------------------------------------------------------
 # Page config (MUST be the first Streamlit call)
