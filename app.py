@@ -649,19 +649,16 @@ def transcribe_with_whisper(
 
 def build_vectorstore(transcript_text: str, chunk_size: int, chunk_overlap: int, embedding_model: str = "text-embedding-004"):
     """Split transcript → embed → build FAISS vector store."""
-
-    # ── Guard: API key must be set before calling Google ───────────────────
-    if not os.environ.get("GOOGLE_API_KEY", "").strip():
+    api_key = os.environ.get("GOOGLE_API_KEY", "").strip().strip("'").strip('"')
+    if not api_key:
         raise ValueError(
             "GOOGLE_API_KEY is not set!\n"
             "On Streamlit Cloud: go to App Settings → Secrets and add:\n"
             "  GOOGLE_API_KEY = \"your-key-here\"\n"
-            "Get a free key at https://aistudio.google.com/apikey"
+            "Or paste your Gemini key in the sidebar."
         )
 
-    # ── Auto-fix model name: newer langchain-google-genai needs 'models/' prefix
-    if not embedding_model.startswith("models/"):
-        embedding_model = f"models/{embedding_model}"
+    clean_model = embedding_model.replace("models/", "").strip()
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
@@ -669,9 +666,24 @@ def build_vectorstore(transcript_text: str, chunk_size: int, chunk_overlap: int,
         separators=["\n\n", "\n", ". ", " ", ""],
     )
     docs = splitter.create_documents([transcript_text])
-    embeddings = GoogleGenerativeAIEmbeddings(model=embedding_model)
-    vectorstore = FAISS.from_documents(docs, embeddings)
-    return vectorstore, len(docs)
+
+    # Fallback order if chosen embedding model isn't available
+    models_to_try = [clean_model]
+    for fallback in ["text-embedding-004", "embedding-001"]:
+        if fallback not in models_to_try:
+            models_to_try.append(fallback)
+
+    last_err = None
+    for m in models_to_try:
+        try:
+            embeddings = GoogleGenerativeAIEmbeddings(model=m, google_api_key=api_key)
+            vectorstore = FAISS.from_documents(docs, embeddings)
+            return vectorstore, len(docs)
+        except Exception as err:
+            last_err = err
+            continue
+
+    raise last_err
 
 
 def retrieve_context(vectorstore, question: str, k: int = 5) -> str:
@@ -688,8 +700,14 @@ def retrieve_context(vectorstore, question: str, k: int = 5) -> str:
 # 🤖  LLM-BACKED FEATURES
 # ===========================================================================
 
-def get_llm(model_name: str = "gemini-2.0-flash", temperature: float = 0.3):
-    return ChatGoogleGenerativeAI(model=model_name, temperature=temperature)
+def get_llm(model_name: str = "gemini-2.5-flash", temperature: float = 0.3):
+    api_key = os.environ.get("GOOGLE_API_KEY", "").strip().strip("'").strip('"')
+    clean_model = model_name.replace("models/", "").strip()
+    return ChatGoogleGenerativeAI(
+        model=clean_model,
+        temperature=temperature,
+        google_api_key=api_key if api_key else None,
+    )
 
 
 def chat_with_video(vectorstore, question: str, model_name: str) -> str:
@@ -972,7 +990,7 @@ with st.sidebar:
         help="Get a free key at https://aistudio.google.com/apikey",
         placeholder="AIza…",
     )
-    effective_api_key = api_key_input.strip() or GEMINI_API_KEY.strip()
+    effective_api_key = (api_key_input.strip() or GEMINI_API_KEY.strip()).strip("'").strip('"')
     if effective_api_key:
         os.environ["GOOGLE_API_KEY"] = effective_api_key
 
@@ -991,6 +1009,7 @@ with st.sidebar:
     model_choice = st.selectbox(
         "🤖 Gemini Model",
         options=[
+            "gemini-2.5-flash",
             "gemini-2.0-flash",
             "gemini-2.5-flash-preview-05-20",
             "gemini-2.0-flash-lite",
@@ -998,7 +1017,7 @@ with st.sidebar:
             "gemini-1.5-pro",
         ],
         index=0,
-        help="gemini-2.5-flash-preview = smartest & fastest preview model",
+        help="gemini-2.5-flash = latest & smartest flash model ✨",
     )
 
     col_cs, col_co = st.columns(2)
@@ -1117,8 +1136,18 @@ with st.sidebar:
                     st.error("❌ No transcript found. Try 'Whisper AI only'.")
                     st.stop()
 
-                with st.spinner("🧠 Building semantic index…"):
-                    vs, n_chunks = build_vectorstore(transcript_text, chunk_size, chunk_overlap, embedding_model)
+                try:
+                    with st.spinner("🧠 Building semantic index…"):
+                        vs, n_chunks = build_vectorstore(transcript_text, chunk_size, chunk_overlap, embedding_model)
+                except Exception as e:
+                    st.error(f"❌ Error generating embeddings / vector index: {e}")
+                    st.info(
+                        "💡 **Troubleshooting Tips:**\n"
+                        "1. Verify your Gemini API key at https://aistudio.google.com/apikey\n"
+                        "2. Ensure you have selected a valid Embedding Model (e.g. `text-embedding-004` or `embedding-001`)\n"
+                        "3. On Streamlit Cloud: make sure `GOOGLE_API_KEY` is added to App Settings → Secrets."
+                    )
+                    st.stop()
 
                 # Save to session
                 st.session_state.vectorstore = vs
