@@ -647,8 +647,22 @@ def transcribe_with_whisper(
 # 🔧  VECTOR-STORE
 # ===========================================================================
 
-def build_vectorstore(transcript_text: str, chunk_size: int, chunk_overlap: int, embedding_model: str = "embedding-001"):
+def build_vectorstore(transcript_text: str, chunk_size: int, chunk_overlap: int, embedding_model: str = "text-embedding-004"):
     """Split transcript → embed → build FAISS vector store."""
+
+    # ── Guard: API key must be set before calling Google ───────────────────
+    if not os.environ.get("GOOGLE_API_KEY", "").strip():
+        raise ValueError(
+            "GOOGLE_API_KEY is not set!\n"
+            "On Streamlit Cloud: go to App Settings → Secrets and add:\n"
+            "  GOOGLE_API_KEY = \"your-key-here\"\n"
+            "Get a free key at https://aistudio.google.com/apikey"
+        )
+
+    # ── Auto-fix model name: newer langchain-google-genai needs 'models/' prefix
+    if not embedding_model.startswith("models/"):
+        embedding_model = f"models/{embedding_model}"
+
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
@@ -976,8 +990,15 @@ with st.sidebar:
 
     model_choice = st.selectbox(
         "🤖 Gemini Model",
-        options=["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash", "gemini-1.5-pro"],
+        options=[
+            "gemini-2.0-flash",
+            "gemini-2.5-flash-preview-05-20",
+            "gemini-2.0-flash-lite",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+        ],
         index=0,
+        help="gemini-2.5-flash-preview = smartest & fastest preview model",
     )
 
     col_cs, col_co = st.columns(2)
@@ -988,9 +1009,13 @@ with st.sidebar:
 
     embedding_model = st.selectbox(
         "🧠 Embedding Model",
-        options=["embedding-001", "text-embedding-004", "gemini-embedding-001"],
+        options=[
+            "text-embedding-004",
+            "embedding-001",
+            "gemini-embedding-001",
+        ],
         index=0,
-        help="Switch to 'embedding-001' if you get a 404 error.",
+        help="text-embedding-004 is recommended — most stable on Streamlit Cloud.",
     )
 
     st.markdown("<hr class='section-divider'>", unsafe_allow_html=True)
