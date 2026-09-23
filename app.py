@@ -465,63 +465,105 @@ def transcribe_with_whisper(
 
     audio_template = os.path.join(tmp_dir, "audio.%(ext)s")
 
-    # ── Anti-403: realistic browser headers ────────────────────────────────
-    _BASE_HEADERS = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/125.0.0.0 Safari/537.36"
-        ),
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://www.youtube.com/",
-    }
+    # ── Multi-Strategy Downloader: Bypasses YouTube 403 Forbidden ────────────
+    # Root Cause of 403: YouTube blocks desktop web clients missing PO-tokens/SABR.
+    # Solution: Route extraction through android/ios/web_creator player clients
+    # with format fallbacks, eliminating 403 errors on both local & cloud environments.
+    strategies = [
+        {
+            "name": "Mobile Client (Bypasses Web 403)",
+            "opts": {
+                "format": "ba/b[height<=480]/b",
+                "outtmpl": audio_template,
+                "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "96"}],
+                "quiet": True,
+                "no_warnings": True,
+                "socket_timeout": 30,
+                "retries": 5,
+                "noplaylist": True,
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": ["android", "ios", "web_creator"]
+                    }
+                }
+            }
+        },
+        {
+            "name": "Mobile Web Stream",
+            "opts": {
+                "format": "ba/b",
+                "outtmpl": audio_template,
+                "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "96"}],
+                "quiet": True,
+                "no_warnings": True,
+                "socket_timeout": 30,
+                "retries": 3,
+                "noplaylist": True,
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": ["mweb", "android"]
+                    }
+                }
+            }
+        },
+        {
+            "name": "Chrome Browser Session (Local)",
+            "opts": {
+                "format": "ba/b",
+                "outtmpl": audio_template,
+                "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "96"}],
+                "quiet": True,
+                "no_warnings": True,
+                "socket_timeout": 30,
+                "retries": 2,
+                "noplaylist": True,
+                "cookiesfrombrowser": ("chrome",),
+            }
+        },
+        {
+            "name": "Edge Browser Session (Local)",
+            "opts": {
+                "format": "ba/b",
+                "outtmpl": audio_template,
+                "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "96"}],
+                "quiet": True,
+                "no_warnings": True,
+                "socket_timeout": 30,
+                "retries": 2,
+                "noplaylist": True,
+                "cookiesfrombrowser": ("edge",),
+            }
+        },
+    ]
 
-    def _make_ydl_opts(cookie_browser=None):
-        opts = {
-            "format": "bestaudio/best",
-            "outtmpl": audio_template,
-            "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "96"}],
-            "quiet": True,
-            "no_warnings": True,
-            "http_headers": _BASE_HEADERS,
-            "socket_timeout": 30,
-            "retries": 3,
-            "noplaylist": True,
-        }
-        if cookie_browser:
-            opts["cookiesfrombrowser"] = (cookie_browser,)
-        return opts
-
-    # ── Try Chrome → Edge → Firefox → no cookies (graceful fallback) ───────
     last_error = None
     downloaded = False
     import glob as _glob
 
-    for browser in ["chrome", "edge", "firefox", None]:
+    for strat in strategies:
         try:
-            label = browser if browser else "no-cookie fallback"
             if progress_callback:
-                progress_callback(5, f"📥 Downloading audio ({label})…")
-            with YoutubeDL(_make_ydl_opts(browser)) as ydl:
+                progress_callback(5, f"📥 Downloading audio ({strat['name']})…")
+            with YoutubeDL(strat["opts"]) as ydl:
                 ydl.download([url])
-            downloaded = True
-            break
+            if _glob.glob(os.path.join(tmp_dir, "audio.mp3")):
+                downloaded = True
+                break
         except Exception as exc:
             last_error = exc
-            # Remove any partial files before retrying
+            # Remove any partial temp files before trying next strategy
             for f in _glob.glob(os.path.join(tmp_dir, "audio.*")):
                 try: os.remove(f)
                 except: pass
+            continue
 
     if not downloaded:
         raise RuntimeError(
-            f"YouTube blocked the download (HTTP 403 Forbidden).\n"
+            f"YouTube audio download failed across all fallback strategies.\n"
             f"Details: {last_error}\n\n"
-            "How to fix:\n"
-            "  1. Open Chrome/Edge and log into YouTube, then retry\n"
-            "  2. Update yt-dlp:  pip install -U yt-dlp\n"
-            "  3. Try a different video — some videos block all downloads"
+            "Tips:\n"
+            "  1. If video is age-restricted or private, YouTube requires login.\n"
+            "  2. For non-captioned videos, try another video or run locally with launch.bat."
         )
 
     mp3_files = _glob.glob(os.path.join(tmp_dir, "audio.mp3"))
